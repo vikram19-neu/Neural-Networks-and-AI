@@ -4,7 +4,19 @@ from PIL import Image
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
-# Neural network helper functions
+
+def load_images_from_folder(folder, label):
+    images = []
+    labels = []
+    for filename in os.listdir(folder):
+        img_path = os.path.join(folder, filename)
+        with Image.open(img_path) as img:
+            img = img.resize((64, 64)).convert('L')  # Resize and convert to grayscale
+            images.append(np.asarray(img) / 255.0)  # Normalize pixel values
+            labels.append(label)
+    return images, labels
+
+
 def relu(z):
     return np.maximum(0, z)
 
@@ -98,37 +110,31 @@ def model(X, Y, layers_dims, learning_rate=0.0075, num_iterations=3000, print_co
             costs.append(cost)
     return weights
 
-# Load and preprocess the images
-image_dir = 'path/to/your/images'  # Adjust this path
-image_paths = [os.path.join(image_dir, f) for f in os.listdir(image_dir)]
-image_size = (64, 64)  # Adjust based on your dataset
 
-images = []
-labels = []
+dataset_directory = 'directory_path'
+cat_images, cat_labels = load_images_from_folder(os.path.join(dataset_directory, 'lab1_cat_dataset'), 1)
+not_cat_images, not_cat_labels = load_images_from_folder(os.path.join(dataset_directory, 'lab1_not_cat_dataset'), 0)
 
-for img_path in image_paths:
-    img = Image.open(img_path).resize(image_size).convert('L')
-    img_array = np.asarray(img, dtype=np.float32) / 255.0
-    images.append(img_array.flatten())
-    label = 1 if 'cat' in os.path.basename(img_path) else 0
-    labels.append(label)
 
-X = np.array(images)
-y = np.array(labels)
-
-# Split the data into training and test sets
+X = np.array(cat_images + not_cat_images).reshape(-1, 64*64)  # Flatten the images
+y = np.array(cat_labels + not_cat_labels)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# Define the layers dimensions
+
 layer_dims = [X_train.shape[1], 10, 8, 8, 4, 1]
 
-# Train the model
+
 trained_weights = model(X_train, y_train, layer_dims, learning_rate=0.0075, num_iterations=2500, print_cost=True)
 
-# Make predictions
+
 AL, _ = forward_propagation(X_test, trained_weights)
 predictions = AL > 0.5
 
-# Evaluate the model
+
 accuracy = accuracy_score(y_test, predictions)
 print(f'Test Accuracy: {accuracy * 100:.2f}%')
+
+
+
+   
+
