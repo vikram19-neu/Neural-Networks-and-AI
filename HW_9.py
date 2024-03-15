@@ -1,270 +1,222 @@
-import pickle
-import math
-import cv2
 import numpy as np
-import arguments as arg
-import math_functions as mf
-from matplotlib import pyplot as plt
-import glob
-import torch
-from torch.utils.data import TensorDataset
-from torch.utils.data import DataLoader
-import matplotlib
 
-matplotlib.use('TkAgg')
+class Parameters:
+    def __init__(self):
+        self.weights = None
+        self.bias = None
 
+    def set_bias(self, bias):
+        self.bias = bias
 
-class Dataset:
-    def __init__(self, address):
-        # define the size and classes number
-        self.img_height = arg.img_height
-        self.img_width = arg.img_width
-        self.num_classes = arg.num_classes
-        self.address = address
-        # create lists to restore img and labels
-        self.x = []  # img
-        self.y = []  # label
+    def get_weights(self):
+        return self.weights
 
-    def loadData(self):
-        # get img and label
-        for folder in glob.glob(self.address):
-            label = folder[-1]
-            label = int(label)
-            for img_path in glob.glob(folder + '/*.png'):
-                img = plt.imread(img_path)
-                img = cv2.resize(img, (self.img_height, self.img_width))
-                self.x.append(img)
-                self.y.append(label)
-        # list to numpy
-        self.x = np.array(self.x).reshape(len(self.x), -1)
-        self.y = one_hot_encode(np.array(self.y), self.num_classes)
-        return DataLoader(self.toTorchDataset(), batch_size=arg.batch_size, shuffle=True)
-
-    def toTorchDataset(self):
-        x = torch.tensor(self.x)
-        y = torch.tensor(self.y)
-        return TensorDataset(x, y)
+    def get_bias(self):
+        return self.bias
 
 
 class Neuron:
-    def __init__(self, num_inputs: int):
-        self.weights = arg.g * torch.randn(num_inputs, 1)
-        self.gradients_w = torch.zeros(num_inputs, 1)
+    def __init__(self, input_size):
+        self.weights = None
+        self.bias = None
+        self.input_size = input_size
+        self.aggregate_signal = None
+        self.activation = None
+        self.output = None
+        self.delta = None
 
-    def update(self, learning_rate: float) -> None:
-        if arg.normalization is None:
-            self.weights -= torch.mul(learning_rate, self.gradients_w)
+    def neuron(self, inputs):
+        if self.weights is None or self.bias is None:
+            raise ValueError("Weights and bias must be set before forward pass")
 
-            # Implement regularization algorithms in your neural network @HW9
+        if inputs.shape[1] != self.weights.shape[0]:
+            raise ValueError(f"Inputs shape ({inputs.shape}) is incompatible with weights shape ({self.weights.shape})")
 
-        if arg.normalization == 'L2':
-            self.weights = torch.mul(1 - learning_rate * arg.lamda, self.weights) - torch.mul(learning_rate,
-                                                                                              self.gradients_w)
+        self.aggregate_signal = np.sum(np.dot(inputs, self.weights.T) + self.bias)
+        self.activation = self.layer.activation(self.aggregate_signal)
+        self.output = self.activation
 
-    def forward(self, inputs: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
-        neuron_output = torch.mm(inputs, self.weights) + bias
-        return neuron_output
+    def update_weights(self, learning_rate, delta):
+        self.weights += learning_rate * delta * self.input
+        self.bias += learning_rate * delta
 
-    def backward(self, gradient_z: torch.Tensor, inputs: torch.Tensor):
-        self.gradients_w = torch.mm(torch.transpose(inputs, 0, 1), gradient_z) / len(gradient_z)
 
-# Implement dropout algorithms in your neural network @HW9
+class ActivationFunctions:
+    @staticmethod
+    def linear(x):
+        return x
 
-def binomialMask():
-    
-    binomial = torch.distributions.binomial.Binomial(total_count=1, probs=arg.dropout_rate)
-   
-    return binomial.sample(torch.zeros(arg.batch_size, 1).shape)
+    @staticmethod
+    def relu(x):
+        return np.maximum(0, x)
+
+    @staticmethod
+    def sigmoid(x):
+        return 1 / (1 + np.exp(-x))
+
+    @staticmethod
+    def tanh(x):
+        return np.tanh(x)
+
+    @staticmethod
+    def softmax(x):
+        exp_values = np.exp(x - np.max(x, axis=1, keepdims=True))
+        return exp_values / np.sum(exp_values, axis=1, keepdims=True)
+
+
+class Activation:
+    def __init__(self, type):
+        self.type = type
+
+    def __call__(self, inputs):
+        if self.type == "linear":
+            return ActivationFunctions.linear(inputs)
+        elif self.type == "relu":
+            return ActivationFunctions.relu(inputs)
+        elif self.type == "sigmoid":
+            return ActivationFunctions.sigmoid(inputs)
+        elif self.type == "tanh":
+            return ActivationFunctions.tanh(inputs)
+        elif self.type == "softmax":
+            return ActivationFunctions.softmax(inputs)
+        else:
+            raise ValueError(f"Invalid activation function type: {self.type}")
+
+
+class Loss:
+    @staticmethod
+    def mean_squared_error(y_true, y_pred):
+        return np.mean((y_true - y_pred) ** 2)
+
+    @staticmethod
+    def binary_cross_entropy(y_true, y_pred):
+        return -np.mean(y_true * np.log(y_pred) + (1 - y_true) * np.log(1 - y_pred))
+
+    @staticmethod
+    def categorical_cross_entropy(y_true, y_pred):
+        return -np.mean(y_true * np.log(y_pred))
 
 
 class Layer:
-    def __init__(self, num_neurons: int, num_inputs: int, activation: str, dropout: bool = False):
-        self.neurons = [Neuron(num_inputs) for _ in range(num_neurons)]
-        self.inputs = torch.zeros(arg.batch_size, num_neurons)
-        self.activation_functions = activation_functions[activation]
-        self.activation_derivative = activation_derivatives[activation]
-        self.bias = torch.zeros(1)
-        self.dropout = dropout
-        self.z = torch.zeros(arg.batch_size, num_neurons)
-        self.gradients_bias = torch.zeros(num_neurons)
+    def __init__(self, neurons, parameters, activation_type, regularization=None, dropout_rate=None):
+        self.neurons = neurons
+        self.parameters = parameters
+        self.weights = self.parameters.get_weights()
+        self.bias = self.parameters.get_bias()
+        self.activation_type = activation_type
+        self.activation = Activation(activation_type)
+        self.neurons_layer = len(neurons)
+        self.regularization = regularization
+        self.dropout_rate = dropout_rate
+        self.dropout_mask = None
 
-    def forward(self, inputs: torch.Tensor, test: bool = False) -> torch.Tensor:
-        if self.dropout:
+    def forward(self, inputs, training=True):
+        outputs = []
+        for neuron in self.neurons:
+            neuron.weights = np.random.rand(self.neurons_layer)
+            neuron.bias = self.bias
+            neuron.layer = self
+            neuron.neuron(inputs)
+            outputs.append(neuron.output)
+        outputs = np.array(outputs)
+        
+        if training and self.dropout_rate is not None:
+            self.dropout_mask = np.random.binomial(1, 1 - self.dropout_rate, size=outputs.shape) / (1 - self.dropout_rate)
+            outputs *= self.dropout_mask
+        
+        return outputs
 
-            # Implement dropout algorithms in your neural network @HW9
+    def backward(self, inputs, deltas, learning_rate):
+        next_layer = self.layer_below
+        next_deltas = next_layer.deltas
+        for i, neuron in enumerate(self.neurons):
+            delta = deltas[i]
+            activation_derivative = neuron.activation_derivative()
+            error = np.dot(delta, next_deltas) * activation_derivative
+            if self.regularization == 'l1':
+                error += learning_rate * np.sign(neuron.weights)
+            elif self.regularization == 'l2':
+                error += learning_rate * neuron.weights
+            neuron.update_weights(learning_rate, error)
 
-            mask = binomialMask()
-            self.inputs = torch.mul(mask, inputs)
-            if test:
-                self.inputs = torch.mul(arg.dropout_rate, self.inputs)
-        else:
-            self.inputs = inputs
-        for i in range(len(self.neurons)):
-            self.z[:, i] = self.neurons[i].forward(self.inputs, self.bias).squeeze()
-        self.z = torch.Tensor(self.z)
-        output = self.activation_functions(self.z)
+
+class NeuralNetwork:
+    def __init__(self, input_size):
+        self.input_size = input_size
+        self.layers = []
+
+    def add_layer(self, num_neurons, activation_type, regularization=None, dropout_rate=None):
+        parameters = Parameters()
+        parameters.set_bias(np.random.rand(num_neurons))
+        layer = Layer([Neuron(self.input_size) for _ in range(num_neurons)], parameters, activation_type, regularization, dropout_rate)
+        self.layers.append(layer)
+        if len(self.layers) > 1:
+            self.layers[-2].layer_below = layer
+
+    def forward(self, inputs):
+        output = inputs
+        for layer in self.layers:
+            output = layer.forward(output)
         return output
 
-    def backward(self, gradients_a: torch.Tensor = None, y_true: torch.Tensor = None) -> torch.Tensor:
-        if gradients_a is not None:
-            gradients_z = torch.mul(self.activation_derivative(self.z), gradients_a).type(torch.float32)
-        elif y_true is not None:
-            gradients_z = self.activation_derivative(self.z, y_true).type(torch.float32)
+    def calculate_loss(self, predictions, targets, loss_type):
+        if loss_type == "mean_squared_error":
+            return Loss.mean_squared_error(targets, predictions)
+        elif loss_type == "binary_cross_entropy":
+            return Loss.binary_cross_entropy(targets, predictions)
+        elif loss_type == "categorical_cross_entropy":
+            return Loss.categorical_cross_entropy(targets, predictions)
         else:
-            raise Exception("No gradient comes in!")
-        for i, neuron in enumerate(self.neurons):
-            neuron.backward(gradients_z[:, i].reshape(-1, 1), self.inputs)
-        weights = self.collectWeight()
-        gradients_next_a = torch.mm(gradients_z, torch.transpose(weights, 0, 1))
-        return gradients_next_a
+            raise ValueError(f"Invalid loss function type: {loss_type}")
 
-    def updateBias(self, learning_rate: float):
-        self.bias -= torch.mul(learning_rate, torch.mean(self.gradients_bias))
-
-    def updateWeight(self, learning_rate: float):
-        for i in range(len(self.neurons)):
-            self.neurons[i].update(learning_rate)
-
-    def collectWeight(self) -> torch.Tensor:
-        list_w = [n.weights for n in self.neurons]
-        return torch.cat(list_w, dim=1)
-
-
-class Model:
-    def __init__(self, train_loader: DataLoader):
-        self.train_loader = train_loader
-        self.layers = []
-        self.losses = []
-        self.init_layers()
-
-    def init_layers(self):
-        self.InitLayersInBatch([128], 'relu')
-        self.InitLayersInBatch([10], 'softmax')
-
-    def forward(self, inputs: torch.Tensor, y_true: torch.Tensor, test: bool = False):
-        layer_output = [inputs]
-        if len(self.layers) > 0:
-            for i in range(len(self.layers)):
-                layer_output.append(self.layers[i].forward(layer_output[i], test))
-            loss = mf.cross_entropy(layer_output[-1], y_true)
-            # plot_output(layer_output)
-            return loss, layer_output[-1]
-        else:
-            raise Exception("No defined layers!")
-
-    def backward(self, y_true: torch.Tensor):
-        gradient = [self.layers[-1].backward(y_true=y_true)]
-        for i in range(len(self.layers) - 1):
-            gradient.append(self.layers[-i - 2].backward(gradients_a=gradient[i]))
-
-    def update_all(self, learning_rate: float):
-        for i in range(len(self.layers)):
-            self.layers[i].updateWeight(learning_rate)
-            self.layers[i].updateBias(learning_rate)
-
-    def train(self):
-        epochs, initial_lr, decay_rate = arg.epochs, arg.initial_lr, arg.decay_rate
-        lr_arr = mf.lrArray(epochs, initial_lr, decay_rate)
+    def train(self, X_train, y_train, X_val, y_val, learning_rate, epochs, loss_type):
         for epoch in range(epochs):
-            for batch in self.train_loader:
-                x, true_labels = batch
-                loss, y_true, y_pred, accuracy = self.workLine(x, true_labels)
-                self.losses.append(loss)
-                self.backward(y_true)
-                self.update_all(lr_arr[epoch])
-                # Print the accuracy of each batch
-                # print(f'Accuracy: {accuracy * 100}%')
-                # Print the epoch number and the loss value
-                print(f'Epoch {epoch + 1}, Loss: {loss}')
+            # Forward pass
+            predictions = self.forward(X_train)
 
-    def test(self, test_loader: DataLoader):
-        acc = []
-        for batch in test_loader:
-            x, true_labels = batch
-            _, _, _, accuracy = self.workLine(x, true_labels, test=True)
-            acc.append(accuracy)
-        # Print the epoch number and the accuracy
-        print(f'Test Accuracy: {torch.mean(torch.tensor(acc)) * 100}%')
+            # Calculate training loss
+            training_loss = self.calculate_loss(predictions, y_train, loss_type)
 
-    def InitLayersInBatch(self, neuron_number_list: list[int], activation: str = 'relu', dropout: bool = False):
-        if len(self.layers) == 0:
-            latest_output_num = arg.size_input
-        else:
-            latest_output_num = len(self.layers[-1].neurons)
+            # Validation forward pass
+            val_predictions = self.forward(X_val)
 
-        neuron_number_list.insert(0, latest_output_num)
+            # Calculate validation loss
+            validation_loss = self.calculate_loss(val_predictions, y_val, loss_type)
 
-        for i in range(len(neuron_number_list) - 1):
-            self.layers.append(Layer(neuron_number_list[i + 1], neuron_number_list[i], activation, dropout=dropout))
+            # Backpropagation
+            self.layers[-1].deltas = predictions - y_train
+            for layer in reversed(self.layers[:-1]):
+                layer.backward(X_train, learning_rate)
 
-    def workLine(self, x: torch.Tensor, true_labels: torch.Tensor, test: bool = False):
-        x = mf.normalize_input(x)
-        y_true = torch.tensor(one_hot_encode(np.array(true_labels), arg.num_classes))
-        loss, y_pred = self.forward(x, y_true, test=test)
-        predicted_labels = torch.argmax(y_pred, dim=1)
-        accuracy = calculateAccuracy(predicted_labels, true_labels)
-        return loss, y_true, y_pred, accuracy
+            # Print epoch information
+            if epoch % 100 == 0:
+                print(f"Epoch {epoch}: Training Loss = {training_loss}, Validation Loss = {validation_loss}")
 
 
-# Define the one-hot encoding function
-def one_hot_encode(y, num_classes):
-    return np.eye(num_classes)[y]
+# Prototype of training, validation, and testing sets
+input_size = 2
+X_train = np.random.randint(2, size=(100, input_size))
+y_train = np.random.randint(2, size=(100, 1))
 
+X_val = np.random.randint(2, size=(20, input_size))
+y_val = np.random.randint(2, size=(20, 1))
 
-def plot_loss_curve(model):
-    # Plot the loss curve
-    losses = model.losses
-    plt.plot(losses)
-    plt.xlabel('Iterations')
-    plt.ylabel('Loss')
-    plt.show()
+X_test = np.random.randint(2, size=(20, input_size))
+y_test = np.random.randint(2, size=(20, 1))
 
+# Create and train the neural network
+dnn = NeuralNetwork(input_size)
+dnn.add_layer(3, "relu", regularization='l2', dropout_rate=0.2)
+dnn.add_layer(2, "sigmoid", regularization='l2', dropout_rate=0.2)
+dnn.add_layer(1, "sigmoid", regularization='l2', dropout_rate=0.2)
 
-def plot_output(output: list[torch.Tensor]):
-    length = math.ceil(math.sqrt(len(output))) + 1
-    for i in range(len(output)):
-        plt.subplot(length, length, i + 1)  # l行l列
-        plt.hist(output[i].flatten(), facecolor='g')
-        plt.title('layer ' + i.__str__())
-        plt.xlim([-100, 100])
-        plt.yticks([])
-    plt.show()
+learning_rate = 0.01
+epochs = 1000
+loss_type = "mean_squared_error"
 
+dnn.train(X_train, y_train, X_val, y_val, learning_rate, epochs, loss_type)
 
-# save model
-def saveModel(model, filename):
-    with open(filename, 'wb') as f:
-        pickle.dump(model, f)
-
-
-
-def load_model(filename):
-    with open(filename, 'rb') as f:
-        return pickle.load(f)
-
-
-def calculateAccuracy(pred_label, true_label):
-    acc = 0
-    for i in range(len(pred_label)):
-        if pred_label[i] == true_label[i]:
-            acc += 1
-    return acc / len(pred_label)
-
-
-
-activation_functions = {
-    'linear': mf.linear,
-    'sigmoid': mf.sigmoid,
-    'relu': mf.relu,
-    'tanh': mf.tanh,
-    'softmax': mf.softmax
-}
-
-
-activation_derivatives = {
-    'linear': mf.linear_derivative,
-    'sigmoid': mf.sigmoid_derivative,
-    'relu': mf.relu_derivative,
-    'tanh': mf.tanh_derivative,
-    'softmax': mf.softmax_cross_entropy_derivative
-}
+# Test the neural network
+predictions = dnn.forward(X_test)
+test_loss = dnn.calculate_loss(predictions, y_test, loss_type)
+print(f"Test Loss: {test_loss}")
